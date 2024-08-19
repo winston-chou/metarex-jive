@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 import numpy as np
 import pandas as pd
 from pypika import Field, Query, Table, functions as F
@@ -20,13 +20,23 @@ class JIVE:
 
 
 def to_treatment_effects(
-    moments: pd.DataFrame, test_id_cols: List[str], arm_id_col: str
+    moments: pd.DataFrame,
+    test_id_cols: List[str],
+    arm_id_col: str,
+    weight_col: Optional[str] = None,
 ):
     reference_cells = moments.groupby(test_id_cols, as_index=False)[arm_id_col].min()
     reference_cell_data = moments.merge(reference_cells)
-    return moments.merge(
+    treatment_effects = moments.merge(
         reference_cell_data, on=test_id_cols, suffixes=["|t", "|r"]
     ).pipe(lambda df: df[df[f"{arm_id_col}|t"] != df[f"{arm_id_col}|r"]])
+    if weight_col:
+        # Assume these are sample sizes and convert to harmonic means.
+        treatment_effects[weight_col] = 4 / (
+            1 / treatment_effects[f"{weight_col}|t"]
+            + 1 / treatment_effects[f"{weight_col}|r"]
+        )
+    return treatment_effects
 
 
 def _get_covariance_matrix_from_row(row, metrics, kind):
