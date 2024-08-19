@@ -1,4 +1,6 @@
+from typing import List
 import numpy as np
+import pandas as pd
 from pypika import Field, Query, Table, functions as F
 
 from .column_map import ColumnMap
@@ -17,21 +19,45 @@ class JIVE:
         return get_all_moments(self.table, self.dimensions, self.measures)
 
 
-def _get_covariance_matrix_from_row(row, metrics):
-    cov = np.zeros(len(metrics) + 1, len(metrics) + 1)
+def to_treatment_effects(
+    moments: pd.DataFrame, test_id_cols: List[str], arm_id_col: str
+):
+    reference_cells = moments.groupby(test_id_cols, as_index=False)[arm_id_col].min()
+    reference_cell_data = moments.merge(reference_cells)
+    return moments.merge(
+        reference_cell_data, on=test_id_cols, suffixes=["|t", "|r"]
+    ).pipe(lambda df: df[df[f"{arm_id_col}|t"] != df[f"{arm_id_col}|r"]])
+
+
+def _get_covariance_matrix_from_row(row, metrics, kind):
+    cov = np.zeros((len(metrics) + 1, len(metrics) + 1))
     cov[0, 0] += 1
-    for i, m1 in enumerate(metrics):
-        cov[0, i + 1] = row[f"{m1}|avg"]  # Fill out first row
-        cov[i + 1, 0] = row[f"{m1}|avg"]  # Fill out first col
-        for j, m2 in enumerate(metrics):
-            cov[i + 1, j + 1] = row[f"{m1}:{m2}|loo_cov"]
+
+    if kind == "summary":
+        for i, m1 in enumerate(metrics):
+            cov[0, i + 1] = row[f"{m1}|avg"]  # Fill out first row
+            cov[i + 1, 0] = row[f"{m1}|avg"]  # Fill out first col
+            for j, m2 in enumerate(metrics):
+                cov[i + 1, j + 1] = row[f"{m1}:{m2}|loo_cov"]
+    elif kind == "treatment_effect":
+        for i, m1 in enumerate(metrics):
+            cov[0, i + 1] = row[f"{m1}|avg|t"] - row[f"{m1}|avg|r"]
+            cov[i + 1, 0] = row[f"{m1}|avg|t"] - row[f"{m1}|avg|r"]
+            for j, m2 in enumerate(metrics):
+                cov[i + 1, j + 1] = (
+                    row[f"{m1}:{m2}|loo_cov|t"]
+                    + row[f"{m1}:{m2}|loo_cov|r"]
+                    - np.outer(row[f"{m1}|avg|t"], row[f"{m2}|avg|r"])
+                    - np.outer(row[f"{m1}|avg|r"], row[f"{m2}|avg|t"])
+                )
     return cov
 
-def _get_covariance_matrix(df, metrics, weight_col):
-    cov = np.zeros(len(metrics) + 1, len(metrics) + 1)
+
+def _get_covariance_matrix(df, metrics, weight_col=None, kind="treatment_effect"):
+    cov = np.zeros((len(metrics) + 1, len(metrics) + 1))
     for _, row in df.iterrows():
         w = row.get(weight_col) or 1
-        cov += w * _get_covariance_matrix_from_row(row, metrics)
+        cov += w * _get_covariance_matrix_from_row(row, metrics, kind=kind)
     return cov
 
 
