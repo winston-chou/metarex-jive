@@ -2,8 +2,10 @@ from typing import List, Optional
 import numpy as np
 import pandas as pd
 from pypika import Field, Query, Table, functions as F
+from tqdm import tqdm
 
 from .column_map import ColumnMap
+from .solvers import get_ols_from_covariance
 
 
 class JIVE:
@@ -37,6 +39,18 @@ def to_treatment_effects(
             + 1 / treatment_effects[f"{weight_col}|r"]
         )
     return treatment_effects
+
+
+def get_coef(df, metrics, weight_col, kind):
+    cov = _get_covariance_matrix(df, metrics, weight_col, kind)
+    return get_ols_from_covariance(cov)
+
+
+def get_jackknife_stderrs(df, metrics, weight_col=None, kind="treatment_effect"):
+    coefs = np.zeros((len(df), len(metrics)))
+    for i, ix in tqdm(enumerate(df.index)):
+        coefs[i, : len(metrics)] = get_coef(df.drop(i), metrics, weight_col, kind)
+    return np.sqrt(np.diag(np.cov(coefs, rowvar=False) * (len(coefs) - 1)))
 
 
 def _get_covariance_matrix_from_row(row, metrics, kind):
